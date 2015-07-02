@@ -1,18 +1,3 @@
-var ctx, grid, interval, experiments = 0;
-
-var btn = document.querySelector('input[type=submit]');
-var arr = document.querySelectorAll('input[type=text]');
-
-btn.addEventListener('click', function (e){
-  if(interval) return;
-
-  var n = +arr[0].value || 50;
-  var freq = +arr[1].value || 1;
-  var times = +arr[2].value || 5;
-
-  initSim(n, freq, times);
-});
-
 function init(){
   var cns = document.createElement('canvas');
 
@@ -21,43 +6,53 @@ function init(){
 
   document.body.appendChild(cns);
 
-  ctx = cns.getContext('2d');
+  var ctx = cns.getContext('2d');
+  
+  var btn = document.querySelector('input[type=submit]');
+  var arr = document.querySelectorAll('input[type=text]');
+  
+  btn.addEventListener('click', function (e){
+    var n = +arr[0].value || 50;
+    var freq = +arr[1].value || 1;
+    var times = +arr[2].value || 5;
 
-  var str = JSON.stringify({
-    values : [];
+    initSim(ctx, n, freq, times);
   });
-  localStorage.set('stats', str);
 }
 
-function initSim(n, freq, times){
-  grid = [];
+function initSim(ctx, n, freq, times){  
+  var grid = [];
 
-  experiments++;
-
-  var size = Site.size = 500 / n;
+  var size = 500 / n;
 
   for(var i = 0, l = n * n; i < l; i++){
     var x = i % n * size;
     var y = Math.floor(i / n) * size;
     grid[i] = new Site(x, y);
   }
-
+  
+  var top = n * n, bot = n * n + 1;
+  
   var model = new Model(n * n + 2);
+  
+  var drawer = new Drawer(ctx, grid, size);
+  
+  Statistics.initStorage();
+  
+  var stats = new Statistics(grid, times);
 
-  interval = setInterval(function (){
-    var i = generateRandom();
+  drawer.drawGrid();  
+  
+  var interval = setInterval(function (){
+    var i = Math.floor(Math.random() * grid.length);
 
     if(grid[i].opened) return;
 
-    grid[i].opened = true;
-
-    openSite(i);
-
-    var top = n * n, bot = n * n + 1;
-
-    if(i < n){
-      model.union(i, top);
-    } else if(i > top - n - 1){
+    drawer.openSite(i);
+    
+    if (i < n) {
+      model.union(i, top)
+    } else if (i > top - n) {
       model.union(i, bot);
     }
 
@@ -65,25 +60,30 @@ function initSim(n, freq, times){
 
     for(var p = 0; p < 4; p++){
       var site = adjacent[p];
-      if(site > 0 && site < n * n){
-        if(grid[site].opened) model.union(i, site);
+      if (site >= 0 && site < top) {
+        if (grid[site].opened) model.union(i, site);
       }
     }
 
     if(model.connected(top, bot)){
       window.clearInterval(interval);
       interval = null;
-      if(experiments < times){
-        saveStats();
-        initSim(n, freq, times);
+      stats.saveStats();
+      if(stats.executed < times){
+        initSim(ctx, n, freq, times);
       } else {
-        showStats();
+        var res = stats.countStats();
+        showStats(res);
+        Statistics.clearStorage();
       }
     }
-  }, freq * 1000)
-
-  drawGrid();
+  }, freq * 1000);
 };
+
+function showStats(arr){
+  var str = 'mean:' + arr[0] + '\nstddev:' + arr[1] + '\nconfidence: ' + arr[2] + ' , ' + arr[3];
+  document.querySelector('.stats p').textContent = str;
+}
 
 function Site(x, y){
   this.x = x;
@@ -91,37 +91,101 @@ function Site(x, y){
   this.opened = false;
 }
 
-function drawGrid(){
-  ctx.fillStyle = "#000";
-  for(var i = 0; i < grid.length; i++){
-    var site = grid[i];
-    ctx.fillRect(site.x, site.y, Site.size, Site.size);
+function Statistics(grid, times) {
+  this.grid = grid;
+  
+  var arr = JSON.parse(localStorage.getItem('stats')).values;
+  
+  if (arr && arr.length) {
+    this.executed = arr.length + 1;
+  } else {
+    this.executed = 1;
   }
+  
+  this.times = times;
 }
 
-function openSite(i, j){
-  ctx.fillStyle = "#fff";
-  var site = grid[i];
-  ctx.fillRect(site.x, site.y, Site.size, Site.size);
-}
-
-function generateRandom(){
-  return Math.floor(Math.random() * grid.length);
-}
-
-function saveStats(){
+Statistics.prototype.saveStats = function (){
   var opened = 0;
-  for(var i = 0; i < grid.length; i++){
-    if(grid[i].opened) opened++;
+  for(var i = 0; i < this.grid.length; i++){
+    if(this.grid[i].opened) opened++;
   }
+  
+  opened /= this.grid.length - 2;
 
-  var stats = JSON.parse(localStorage.get('stats'));
-  stats[]
-
+  var stats = JSON.parse(localStorage.getItem('stats'));
+  stats.values.push(opened);
+  
+  localStorage.setItem('stats', JSON.stringify(stats));
 }
 
-function showStats(){
-  console.log('Stats are:');
+Statistics.initStorage = function (){
+  if (localStorage.getItem('stats') !== null) return;
+  
+  var str = JSON.stringify({
+    values : []
+  });
+  localStorage.setItem('stats', str);
+}
+
+Statistics.clearStorage = function (){
+  localStorage.removeItem('stats');
+}
+
+Statistics.prototype.countStats = function (){
+  var arr = JSON.parse(localStorage.getItem('stats')).values;
+  
+  this._mean(arr);
+  this._dev(arr);
+  this._conf();
+  
+  return [this.mean, this.deviation].concat(this.confidence);
+}
+
+Statistics.prototype._mean = function (arr){
+  this.mean = 0;
+  for(var i = 0; i < arr.length; i++){
+    this.mean += arr[i];
+  }
+  
+  this.mean /= this.executed;
+}
+
+Statistics.prototype._dev = function (arr){
+  this.deviation = 0;
+  for(var i = 0; i < arr.length; i++){
+    this.deviation += Math.pow(arr[i] - this.mean, 2);
+  }
+  
+  this.deviation /= (this.executed - 1);
+}
+
+Statistics.prototype._conf = function (){
+  var left = this.mean  - 1.96 * this.deviation / Math.sqrt(this.executed);
+  var right = this.mean + 1.96 * this.deviation / Math.sqrt(this.executed);
+  
+  this.confidence = [left, right];
+}
+
+function Drawer (ctx, grid, size){
+  this.ctx = ctx;
+  this.grid = grid;
+  this.size = size;
+}
+
+Drawer.prototype.drawGrid = function (){
+  this.ctx.fillStyle = "#000";
+  for(var i = 0; i < this.grid.length; i++){
+    var site = this.grid[i];
+    this.ctx.fillRect(site.x, site.y, this.size, this.size);
+  }
+}
+
+Drawer.prototype.openSite = function (i){
+  this.ctx.fillStyle = "#fff";
+  var site = this.grid[i];
+  this.ctx.fillRect(site.x, site.y, this.size, this.size);
+  site.opened = true;
 }
 
 function Model(n){
@@ -156,6 +220,5 @@ Model.prototype.union = function (p, q){
     this.size[rootQ] += this.size[rootP];
   }
 }
-
 
 init();
